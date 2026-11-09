@@ -16,6 +16,7 @@ fn main() {
         "qml/LineModel.qml",
         "qml/Main.qml",
         "qml/MeshPart.qml",
+        "qml/ModelEditor.qml",
         "qml/NewCourseDialog.qml",
         "qml/NewPathDialog.qml",
         "qml/OpenCourseDialog.qml",

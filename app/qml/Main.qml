@@ -406,6 +406,18 @@ Kirigami.ApplicationWindow {
         onTriggered: importDialog.open()
     }
     Kirigami.Action {
+        id: modelEditorAction
+        text: "Model Editor…"
+        icon.name: "draw-cuboid"
+        shortcut: "Ctrl+M"
+        enabled: editor.ready
+        onTriggered: {
+            modelEditor.show();
+            modelEditor.raise();
+            modelEditor.requestActivate();
+        }
+    }
+    Kirigami.Action {
         id: settingsAction
         text: "Settings…"
         icon.name: "configure"
@@ -444,6 +456,7 @@ Kirigami.ApplicationWindow {
             QQC2.MenuItem { action: testAction }
             QQC2.MenuSeparator {}
             QQC2.MenuItem { action: importAction }
+            QQC2.MenuItem { action: modelEditorAction }
             QQC2.MenuSeparator {}
             QQC2.MenuItem {
                 text: "Open Mod Folder"
@@ -802,6 +815,12 @@ Kirigami.ApplicationWindow {
     PlaceAlongDialog {
         id: placeDialog
         editor: editor
+    }
+    ModelEditor {
+        id: modelEditor
+        editor: editor
+        visible: false
+        onImportRequested: importDialog.open()
     }
     ImportModelDialog {
         id: importDialog

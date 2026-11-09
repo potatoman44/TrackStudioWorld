@@ -31,7 +31,7 @@ use glam::{Mat3, Mat4, Vec3};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ImportedPart {
     /// the material's name, or `default` for faces without one
     pub name: String,
@@ -48,7 +48,7 @@ pub struct ImportedPart {
     pub color: [f32; 4],
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ImportedModel {
     pub parts: Vec<ImportedPart>,
 }

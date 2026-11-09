@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Model Editor** (Ctrl+M): a window with the mod's custom objects, a 3D preview, and their
+  settings: label, scale, rotation, offset, grounding, and per material texture, tint, UV scale
+  and offset, flip, lighting and visibility. Imports keep their source so edits rebuild cleanly;
+  objects can be removed from the mod.
 - **New Course** (Ctrl+N): start a course, empty or copied, at the place of a shipped one.
 - **Save As (Replace Course)** (Ctrl+Shift+S): save the open course as any course file, replacing
   that course in the mod (its `FilePath` and PathAdditionalData follow). A new course asks for

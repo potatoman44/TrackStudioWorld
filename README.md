@@ -171,6 +171,14 @@ adds a row to `RSDB/Actor`, and adds size table entries for all of them. The mod
 listed in `<mods>/<mod name>/custom_objects.json`, next to `romfs/`. Importing a name again
 replaces that object. **Imported objects have no collision yet.**
 
+**File → Model Editor…** (Ctrl+M) opens a window with the mod's custom objects and a preview.
+For each object you can change its label, scale, rotation and offset (or put its origin at the
+middle of its bottom). For each material you can replace or add its texture, tint it, scale and
+shift its UVs, flip V, choose how bright the borrowed baked lighting is, and hide it. **Apply**
+rebuilds the object from its source: every import keeps its meshes and images in
+`<mods>/<mod name>/custom_src/<name>/`, so edits never pile up. **Remove** takes an object out of
+the mod again.
+
 ## Installing a mod
 
 The editor writes a LayeredFS mod to `<mods>/<mod name>/romfs/`.

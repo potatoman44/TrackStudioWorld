@@ -48,6 +48,7 @@ pub mod qobject {
         #[qproperty(i32, error_count)]
         #[qproperty(i32, warning_count)]
         #[qproperty(i32, selection_count)]
+        #[qproperty(i32, custom_revision)]
         type Editor = super::EditorRust;
 
         #[qsignal]
@@ -200,6 +201,16 @@ pub mod qobject {
         fn inspect_model(self: &Editor, path: &QString) -> QString;
         #[qinvokable]
         fn import_model(self: Pin<&mut Editor>, path: &QString, name: &QString, label: &QString, scale: f64) -> QString;
+        #[qinvokable]
+        fn custom_objects(self: &Editor) -> QString;
+        #[qinvokable]
+        fn update_custom(self: Pin<&mut Editor>, name: &QString, label: &QString, settings: &QString) -> QString;
+        #[qinvokable]
+        fn set_custom_texture(self: Pin<&mut Editor>, name: &QString, index: i32, path: &QString) -> QString;
+        #[qinvokable]
+        fn delete_custom(self: Pin<&mut Editor>, name: &QString) -> QString;
+        #[qinvokable]
+        fn preview_model(self: &Editor, rel: &QString) -> i32;
     }
 
     // editing tools (copy and paste, path drawing, selection, modal transforms, problems)
@@ -1420,7 +1431,6 @@ impl qobject::Editor {
         self.as_mut().set_busy(false);
         let out = match res {
             Ok(r) => {
-                let _ = std::fs::remove_file(thumbs::thumb_path(&r.object.model));
                 let st = self.as_mut().stm();
                 st.log(format!(
                     "Imported {} as {} into mod \"{}\": {} file(s) written{}",
@@ -1437,13 +1447,67 @@ impl qobject::Editor {
                 json!({"ok": false, "error": crate::config::tilde(&e.to_string())})
             }
         };
+        self.as_mut().custom_changed(out["ok"] == true);
+        q(out.to_string())
+    }
+
+    /// After custom objects changed: refresh the panels, the models, the model editor's
+    /// preview and (when something was written) the thumbnails.
+    fn custom_changed(mut self: Pin<&mut Self>, written: bool) {
         self.as_mut().sync_flags();
         self.as_mut().bump(Refresh::ALL);
         self.as_mut().load_models();
-        if out["ok"] == true {
+        let v = *self.custom_revision() + 1;
+        self.as_mut().set_custom_revision(v);
+        if written {
             self.build_thumbnails();
         }
-        q(out.to_string())
+    }
+
+    /// The open mod's custom objects, as JSON for the model editor.
+    fn custom_objects(&self) -> QString {
+        q(crate::config::tilde(&self.st().custom_json().to_string()))
+    }
+
+    /// Rebuild a custom object with new settings. Returns "" or the error.
+    fn update_custom(mut self: Pin<&mut Self>, name: &QString, label: &QString, settings: &QString) -> QString {
+        let res = self.as_mut().stm().update_custom(&name.to_string(), &label.to_string(), &settings.to_string());
+        self.as_mut().custom_result(res.map(|r| format!("Rebuilt {} ({})", r.object.actor, r.object.label)))
+    }
+
+    /// Give a custom object's material a new image. Returns "" or the error.
+    fn set_custom_texture(mut self: Pin<&mut Self>, name: &QString, index: i32, path: &QString) -> QString {
+        let path = crate::config::expand(&path.to_string());
+        let res = self.as_mut().stm().set_custom_texture(&name.to_string(), index.max(0) as usize, &path);
+        self.as_mut().custom_result(res.map(|r| format!("New texture for {}, material {}", r.object.actor, index + 1)))
+    }
+
+    /// Remove a custom object from the open mod. Returns "" or the error.
+    fn delete_custom(mut self: Pin<&mut Self>, name: &QString) -> QString {
+        let n = name.to_string();
+        let mod_name = self.st().mod_name.clone();
+        let res = self.as_mut().stm().delete_custom(&n);
+        self.as_mut().custom_result(res.map(|c| {
+            format!(
+                "Removed {n} from mod \"{mod_name}\" ({} file(s) changed); objects of that type left in courses no longer load",
+                c.len()
+            )
+        }))
+    }
+
+    fn custom_result(mut self: Pin<&mut Self>, res: mkwtrack::Result<String>) -> QString {
+        let (ok, msg) = match res {
+            Ok(m) => (true, m),
+            Err(e) => (false, e.to_string()),
+        };
+        self.as_mut().log(if ok { msg.clone() } else { format!("Model editor: {msg}") });
+        self.as_mut().custom_changed(ok);
+        q(if ok { String::new() } else { crate::config::tilde(&msg) })
+    }
+
+    /// Load a model now for the model editor's preview; its part count (0 when it can't be read).
+    fn preview_model(&self, rel: &QString) -> i32 {
+        self.st().preview_model(&rel.to_string()).map_or(0, |n| n as i32)
     }
 }
 

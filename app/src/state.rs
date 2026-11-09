@@ -247,33 +247,97 @@ impl State {
             return Err(format!("\"{}\" is not a usable mod name", self.mod_name).into());
         }
         let model = mkwtrack::import::load(path)?;
-        let mut parts = vec![];
-        for p in model.parts {
-            let image = match &p.texture {
-                Some(t) => match mkwtrack::import::load_image(t) {
-                    Ok((width, height, rgba)) => Some(mkwtrack::bntx::Image { width, height, rgba }),
-                    Err(e) => {
-                        self.log(format!("Texture {}: {e} (using the material colour)", t.display()));
-                        None
-                    }
-                },
-                None => None,
-            };
-            let mesh = mkwtrack::bfres_write::Mesh {
-                positions: p.positions.iter().map(|v| v.map(|x| x * scale)).collect(),
-                normals: p.normals,
-                uvs: p.uvs,
-                indices: p.indices,
-            };
-            parts.push(mkwtrack::custom::ImportPart { mesh, image, color: p.color });
-        }
         let source = path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         let label = if label.trim().is_empty() { name } else { label.trim() };
-        let res = mkwtrack::custom::import(&self.cfg.romfs, &self.mod_dir(), name, label, &source, parts)?;
-        self.models.map.lock().unwrap().remove(&res.object.model);
+        let res = mkwtrack::custom::import(&self.cfg.romfs, &self.mod_dir(), name, label, &source, &model, scale)?;
+        self.after_custom_change(&res.object.model);
+        Ok(res)
+    }
+
+    /// Forget the cached model and texture previews of a rebuilt custom object, and show the
+    /// mod's objects as they now are.
+    fn after_custom_change(&mut self, model_rel: &str) {
+        self.models.map.lock().unwrap().remove(model_rel);
+        let _ = std::fs::remove_file(crate::thumbs::thumb_path(model_rel));
         self.refresh_custom();
         self.rebuild();
+    }
+
+    /// The open mod's custom objects for the model editor: settings, materials (with their
+    /// image previews) and whether each can be edited.
+    pub fn custom_json(&self) -> Value {
+        let dir = self.mod_dir();
+        json!(
+            self.custom
+                .iter()
+                .map(|o| {
+                    let materials: Vec<Value> = o
+                        .settings
+                        .materials
+                        .iter()
+                        .enumerate()
+                        .map(|(i, m)| {
+                            let img = mkwtrack::custom::material_image(&dir, &o.name, &o.settings, i);
+                            json!({"name": m.name, "image": img.map(|p| crate::config::file_url(&p)).unwrap_or_default(), "settings": m})
+                        })
+                        .collect();
+                    json!({"name": o.name, "label": o.label, "actor": o.actor, "model": o.model, "source": o.source, "aabb": o.aabb,
+                       "editable": mkwtrack::custom::has_source(&dir, &o.name), "settings": o.settings, "materials": materials})
+                })
+                .collect::<Vec<_>>()
+        )
+    }
+
+    /// Rebuild a custom object with new settings (JSON of [`mkwtrack::custom::ModelSettings`]).
+    pub fn update_custom(&mut self, name: &str, label: &str, settings: &str) -> mkwtrack::Result<mkwtrack::custom::Imported> {
+        let settings: mkwtrack::custom::ModelSettings = serde_json::from_str(settings)?;
+        let label = if label.trim().is_empty() { name } else { label.trim() };
+        let res = mkwtrack::custom::update(&self.cfg.romfs, &self.mod_dir(), name, label, settings)?;
+        self.after_custom_change(&res.object.model);
         Ok(res)
+    }
+
+    /// Give a custom object's material a new image and rebuild it.
+    pub fn set_custom_texture(
+        &mut self,
+        name: &str,
+        index: usize,
+        image: &std::path::Path,
+    ) -> mkwtrack::Result<mkwtrack::custom::Imported> {
+        let dir = self.mod_dir();
+        let settings = mkwtrack::custom::set_texture(&dir, name, index, image)?;
+        let label = self.custom.iter().find(|o| o.name == name).map(|o| o.label.clone()).unwrap_or_else(|| name.to_string());
+        let res = mkwtrack::custom::update(&self.cfg.romfs, &dir, name, &label, settings)?;
+        self.after_custom_change(&res.object.model);
+        Ok(res)
+    }
+
+    /// Remove a custom object from the open mod.
+    pub fn delete_custom(&mut self, name: &str) -> mkwtrack::Result<Vec<String>> {
+        let model = self.custom.iter().find(|o| o.name == name).map(|o| o.model.clone());
+        let changed = mkwtrack::custom::delete(&self.mod_dir(), name)?;
+        if let Some(m) = model {
+            self.after_custom_change(&m);
+        }
+        Ok(changed)
+    }
+
+    /// Read a model (from the open mod or the game) and its textures into the caches now, for
+    /// the model editor's preview. Returns its part count.
+    pub fn preview_model(&self, rel: &str) -> mkwtrack::Result<usize> {
+        if let Some(m) = self.models.get(rel) {
+            return Ok(m.parts.len());
+        }
+        let roots = self.roots();
+        let root = roots.iter().find(|r| r.join(rel).is_file()).unwrap_or(&roots[roots.len() - 1]);
+        let m = mkwtrack::bfres::load(root, rel)?;
+        let mut names: Vec<String> = m.parts.iter().filter_map(|p| p.texture.clone()).collect();
+        names.sort();
+        names.dedup();
+        crate::textures::ensure_all(&roots, &names);
+        let n = m.parts.len();
+        self.models.map.lock().unwrap().insert(rel.to_string(), Arc::new(m));
+        Ok(n)
     }
 
     /// The catalog cache folder, one per romfs path.
