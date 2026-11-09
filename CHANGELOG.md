@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **New Course** (Ctrl+N): start a course, empty or copied, at the place of a shipped one.
+- **Save As (Replace Course)** (Ctrl+Shift+S): save the open course as any course file, replacing
+  that course in the mod (its `FilePath` and PathAdditionalData follow). A new course asks for
+  this on its first save.
 - **Import Model** (File menu): OBJ, FBX and COLLADA models become new object types in the
   open mod, listed in Assets under Custom. The model is rebuilt from a shipped one (its shaders,
   materials and baked lighting), with BNTX textures, object definitions in the GymlArchive

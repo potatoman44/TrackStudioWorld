@@ -76,15 +76,37 @@ Kirigami.ApplicationWindow {
         onTriggered: openDialog.open()
     }
     Kirigami.Action {
+        id: newCourseAction
+        text: "New Course…"
+        icon.name: "document-new"
+        shortcut: "Ctrl+N"
+        enabled: editor.ready
+        onTriggered: newCourseDialog.open()
+    }
+    Kirigami.Action {
         id: saveAction
         text: "Save Mod"
         icon.name: "document-save"
         shortcut: "Ctrl+S"
         enabled: root.hasCourse
-        onTriggered: {
-            saveDialog.saveResult = JSON.parse(editor.save());
-            saveDialog.open();
+        onTriggered: root.showSave(JSON.parse(editor.save()))
+    }
+    Kirigami.Action {
+        id: saveAsAction
+        text: "Save As (Replace Course)…"
+        icon.name: "document-save-as"
+        shortcut: "Ctrl+Shift+S"
+        enabled: root.hasCourse
+        onTriggered: saveAsDialog.open()
+    }
+    // a new course has no file yet: saving it first asks which course it replaces
+    function showSave(r) {
+        if (r.needTarget === true) {
+            saveAsDialog.open();
+            return;
         }
+        saveDialog.saveResult = r;
+        saveDialog.open();
     }
     Kirigami.Action {
         id: testAction
@@ -94,10 +116,8 @@ Kirigami.ApplicationWindow {
         enabled: root.hasCourse
         onTriggered: {
             const r = JSON.parse(editor.runTest());
-            if (r.ok !== true) {
-                saveDialog.saveResult = r;
-                saveDialog.open();
-            }
+            if (r.ok !== true)
+                root.showSave(r);
         }
     }
     Kirigami.Action {
@@ -402,6 +422,7 @@ Kirigami.ApplicationWindow {
     menuBar: QQC2.MenuBar {
         QQC2.Menu {
             title: "&File"
+            QQC2.MenuItem { action: newCourseAction }
             QQC2.MenuItem { action: openAction }
             QQC2.Menu {
                 id: recentMenu
@@ -419,6 +440,7 @@ Kirigami.ApplicationWindow {
                 }
             }
             QQC2.MenuItem { action: saveAction }
+            QQC2.MenuItem { action: saveAsAction }
             QQC2.MenuItem { action: testAction }
             QQC2.MenuSeparator {}
             QQC2.MenuItem { action: importAction }
@@ -749,6 +771,16 @@ Kirigami.ApplicationWindow {
         editor: editor
         guard: root.confirmDiscard
     }
+    NewCourseDialog {
+        id: newCourseDialog
+        editor: editor
+        guard: root.confirmDiscard
+    }
+    SaveAsDialog {
+        id: saveAsDialog
+        editor: editor
+        onSaved: (r) => root.showSave(r)
+    }
     SaveDialog {
         id: saveDialog
         editor: editor
@@ -803,8 +835,7 @@ Kirigami.ApplicationWindow {
                         if (unsavedDialog.then)
                             unsavedDialog.then();
                     } else {
-                        saveDialog.saveResult = r;
-                        saveDialog.open();
+                        root.showSave(r);
                     }
                 }
             },

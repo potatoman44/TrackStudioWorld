@@ -136,6 +136,21 @@ impl Document {
         d
     }
 
+    /// Make this the course that replaces `rel` when it is saved: its file, its
+    /// PathAdditionalData file and the `FilePath` it names itself by. A course without
+    /// PathAdditionalData gets an empty one, so the replaced course's entries are not left
+    /// behind.
+    pub fn retarget(&mut self, rel: &str) {
+        self.file = rel.to_string();
+        self.pad_file = Some(crate::banc::pad_rel(rel));
+        self.root.insert("FilePath", Byml::Str(crate::banc::file_path_for(rel)));
+        if self.pad.is_none() {
+            self.pad = Some(Byml::Hash64(Default::default()));
+        }
+        self.from_mod = false;
+        self.dirty = true;
+    }
+
     // ------------------------------------------------------------ access
 
     pub fn actors(&self) -> &[Byml] {
@@ -998,6 +1013,16 @@ mod tests {
             pad: None,
             pad_file: None,
         })
+    }
+
+    #[test]
+    fn retargeting_names_the_replaced_course() {
+        let mut d = doc();
+        d.retarget("Banc/Race_DesertHills_A_00[Game03].bcett.byml.zs");
+        assert_eq!(d.file, "Banc/Race_DesertHills_A_00[Game03].bcett.byml.zs");
+        assert_eq!(d.pad_file.as_deref(), Some("Banc/PathAdditionalData/Race_DesertHills_A_00.byml"));
+        assert_eq!(d.root.str_or("FilePath", ""), "Course/Race_DesertHills_A_00.bcett.json");
+        assert!(d.pad.is_some() && d.dirty && !d.from_mod);
     }
 
     #[test]

@@ -70,6 +70,12 @@ pub mod qobject {
         #[qinvokable]
         fn save(self: Pin<&mut Editor>) -> QString;
         #[qinvokable]
+        fn save_as(self: Pin<&mut Editor>, target: &QString) -> QString;
+        #[qinvokable]
+        fn save_as_default(self: &Editor) -> QString;
+        #[qinvokable]
+        fn new_course(self: Pin<&mut Editor>, location: &QString, copy: bool) -> bool;
+        #[qinvokable]
         fn undo(self: Pin<&mut Editor>);
         #[qinvokable]
         fn redo(self: Pin<&mut Editor>);
@@ -576,14 +582,7 @@ impl qobject::Editor {
             self.as_mut().log(format!("Could not open {file}: {e}"));
             return false;
         }
-        let title = {
-            let d = self.st().doc.as_ref().unwrap();
-            format!(
-                "{}{}",
-                d.file.trim_start_matches("Banc/"),
-                if d.from_mod { format!("  [{}]", self.st().mod_name) } else { String::new() }
-            )
-        };
+        let title = self.st().course_title();
         self.as_mut().set_course_title(q(title));
         let from = if self.st().doc.as_ref().is_some_and(|d| d.from_mod) { self.st().mod_name.clone() } else { String::new() };
         self.as_mut().stm().prefs.opened(&file.to_string(), &from);
@@ -705,6 +704,49 @@ impl qobject::Editor {
         let v2 = *self.revision() + 1;
         self.as_mut().set_revision(v2);
         q(crate::config::tilde(&v.to_string()))
+    }
+
+    /// Save the open course as `target` (a course file), replacing that course in the mod.
+    fn save_as(mut self: Pin<&mut Self>, target: &QString) -> QString {
+        let target = target.to_string();
+        let v = self.as_mut().stm().save_as(&target);
+        // the course is now that file, saved or not
+        let title = self.st().course_title();
+        self.as_mut().set_course_title(q(title));
+        if v["ok"] == true {
+            let m = self.st().mod_name.clone();
+            let st = self.as_mut().stm();
+            if let Some(d) = st.doc.as_mut() {
+                d.from_mod = true;
+            }
+            st.prefs.opened(&target, &m);
+            let title = self.st().course_title();
+            self.as_mut().set_course_title(q(title));
+        }
+        self.as_mut().sync_flags();
+        let v2 = *self.revision() + 1;
+        self.as_mut().set_revision(v2);
+        q(crate::config::tilde(&v.to_string()))
+    }
+
+    fn save_as_default(&self) -> QString {
+        q(self.st().save_as_default())
+    }
+
+    /// Start a new course at the place of the course `location`, empty or as a copy of it.
+    fn new_course(mut self: Pin<&mut Self>, location: &QString, copy: bool) -> bool {
+        if let Err(e) = self.as_mut().stm().new_course(&location.to_string(), copy) {
+            self.as_mut().log(format!("Could not start a new course: {e}"));
+            return false;
+        }
+        let title = self.st().course_title();
+        self.as_mut().set_course_title(q(title));
+        self.as_mut().set_ground_ready(false);
+        self.as_mut().changed();
+        let v = *self.stages_revision() + 1;
+        self.as_mut().set_stages_revision(v);
+        self.load_models();
+        true
     }
 
     fn undo(mut self: Pin<&mut Self>) {

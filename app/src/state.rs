@@ -77,6 +77,8 @@ pub struct State {
     pub base_cat: Option<Arc<Catalog>>,
     /// custom objects imported into the open mod
     pub custom: Vec<mkwtrack::custom::CustomObject>,
+    /// where the open new course was started (the course whose place it took)
+    pub new_location: String,
     pub doc: Option<Document>,
     pub selection: Vec<u64>,
     pub view: ViewOptions,
@@ -133,6 +135,7 @@ impl State {
             cat: None,
             base_cat: None,
             custom: vec![],
+            new_location: String::new(),
             doc: None,
             selection: vec![],
             view: ViewOptions { models: true, ..Default::default() },
@@ -311,18 +314,7 @@ impl State {
     pub fn open(&mut self, file: &str, m: Option<&str>) -> mkwtrack::Result<()> {
         let cat = self.cat.clone().ok_or("the game catalog is still loading")?;
         let loaded = self.ws().load(file, m)?;
-        let doc = Document::new(loaded);
-        self.stages = stages_for(&cat, &doc.root, 12).into_iter().cloned().collect();
-        self.doc = Some(doc);
-        self.selection.clear();
-        self.expanded.clear();
-        self.drag = None;
-        self.link_pick = None;
-        self.handle = None;
-        self.view.hidden_items.clear();
-        self.view.hidden_rails.clear();
-        self.ground = None;
-        self.load_gen += 1;
+        self.set_doc(Document::new(loaded), &cat);
         if let Some(m) = m.filter(|m| !m.is_empty())
             && self.mod_name != m
         {
@@ -340,6 +332,105 @@ impl State {
             self.stages.len()
         ));
         Ok(())
+    }
+
+    /// Start a new course (not yet tied to a file) where the course `location` is: empty, or a
+    /// copy of that course's objects and paths. Saving it asks which course it replaces.
+    pub fn new_course(&mut self, location: &str, copy: bool) -> mkwtrack::Result<()> {
+        let cat = self.cat.clone().ok_or("the game catalog is still loading")?;
+        let loaded = self.ws().load(location, None)?;
+        let (doc, pad) = if copy {
+            (loaded.doc, loaded.pad.or_else(|| Some(Byml::Hash64(Default::default()))))
+        } else {
+            (mkwtrack::banc::empty_course(&loaded.doc), Some(Byml::Hash64(Default::default())))
+        };
+        let mut d = Document::new(mkwtrack::workspace::Loaded {
+            file: String::new(),
+            from_mod: false,
+            version: loaded.version,
+            doc,
+            pad,
+            pad_file: None,
+        });
+        d.dirty = true;
+        self.new_location = location.to_string();
+        self.set_doc(d, &cat);
+        self.rebuild();
+        self.log(format!(
+            "New course at {}: {} (File → Save As picks the course it replaces)",
+            location.trim_start_matches("Banc/"),
+            if copy { "a copy of its objects and paths" } else { "empty" }
+        ));
+        Ok(())
+    }
+
+    /// The window title's course part: the file (and mod), or that the course is new.
+    pub fn course_title(&self) -> String {
+        let Some(d) = &self.doc else { return String::new() };
+        if d.file.is_empty() {
+            return format!("New course (at {})", mkwtrack::banc::course_base(&self.new_location));
+        }
+        format!("{}{}", d.file.trim_start_matches("Banc/"), if d.from_mod { format!("  [{}]", self.mod_name) } else { String::new() })
+    }
+
+    /// The course Save As suggests replacing: the open one, or where a new one was started.
+    pub fn save_as_default(&self) -> String {
+        match &self.doc {
+            Some(d) if !d.file.is_empty() => d.file.clone(),
+            _ => self.new_location.clone(),
+        }
+    }
+
+    /// Save the open course into the mod as the course `target`, replacing that one there.
+    pub fn save_as(&mut self, target: &str) -> Value {
+        let Some(doc) = self.doc.as_ref() else { return json!({"ok": false, "errors": ["no course open"]}) };
+        if !banc_files(&self.cfg.romfs).iter().any(|f| f == target) {
+            return json!({"ok": false, "errors": [format!("{target} is not one of the game's course files")]});
+        }
+        let far = self.distance_to(doc, target).filter(|d| *d > 1000.0);
+        self.doc.as_mut().unwrap().retarget(target);
+        let mut v = self.save();
+        if let Some(d) = far
+            && let Some(w) = v["warnings"].as_array_mut()
+        {
+            w.push(json!(format!(
+                "This course is {:.1} km from where {} is. The game loads the scenery around the course it replaces, so build near it.",
+                d / 1000.0,
+                mkwtrack::banc::course_base(target)
+            )));
+        }
+        v
+    }
+
+    /// How far the open course's objects and paths are from the middle of `target`'s bounds.
+    fn distance_to(&self, doc: &Document, target: &str) -> Option<f32> {
+        let mut pts: Vec<Vec3> = doc.actors().iter().map(|a| Vec3::from(a.vec3("Translate", [0.0; 3]))).collect();
+        for r in doc.rails() {
+            pts.extend(Document::points(r).iter().map(|p| Vec3::from(p.vec3("Translation", [0.0; 3]))));
+        }
+        if pts.is_empty() {
+            return None;
+        }
+        let ours = pts.iter().copied().sum::<Vec3>() / pts.len() as f32;
+        let other = self.ws().load(target, None).ok()?;
+        let aabb = other.doc.get("AABB")?;
+        let centre = (Vec3::from(aabb.vec3("Min", [0.0; 3])) + Vec3::from(aabb.vec3("Max", [0.0; 3]))) / 2.0;
+        Some(ours.distance(centre))
+    }
+
+    /// Show `doc`, clearing what belonged to the previous course.
+    fn set_doc(&mut self, doc: Document, cat: &Catalog) {
+        self.stages = stages_for(cat, &doc.root, 12).into_iter().cloned().collect();
+        self.doc = Some(doc);
+        self.selection.clear();
+        self.expanded.clear();
+        self.drag = None;
+        self.link_pick = None;
+        self.handle = None;
+        self.view.hidden_items.clear();
+        self.view.hidden_rails.clear();
+        self.ground = None;
+        self.load_gen += 1;
     }
 
     /// Models the open course needs: stages first, then object models.
@@ -1287,6 +1378,9 @@ impl State {
 
     pub fn save(&mut self) -> Value {
         let (Some(doc), Some(cat)) = (&self.doc, &self.cat) else { return json!({"ok": false, "errors": ["no course open"]}) };
+        if doc.file.is_empty() {
+            return json!({"ok": false, "needTarget": true, "errors": ["Choose which course this one replaces (File → Save As)"]});
+        }
         let res = self.ws().save(&doc.file, &doc.root, doc.pad.as_ref(), &self.mod_name, &doc.deleted, Some(cat));
         let emu = emulator_load_dir();
         let mod_dir = res.mod_romfs.parent().map(|p| p.to_path_buf()).unwrap_or_default();

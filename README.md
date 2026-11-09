@@ -146,6 +146,16 @@ game's databases and every course, about 7 s, and caches the result in
 The view has a **top view** (Ctrl+T, orthographic), Alt+drag orbiting, and lit, unlit, normals
 and wireframe shading.
 
+### New courses and replacing courses
+
+**File → New Course…** (Ctrl+N) starts a course at the place of a shipped course (its stage is
+drawn around it), either empty or as a copy of that course's objects and paths. **File → Save
+As (Replace Course)…** (Ctrl+Shift+S) saves the open course into the mod as any course file you
+pick, with its own PathAdditionalData and `FilePath`, so it replaces that course in game; saving a
+new course asks for this first. Each course's place in the world comes from the game's course
+table, not the course file, so the scenery that loads is the replaced course's: build near the
+course you replace (Save As warns when the course is over a kilometre away).
+
 ### Importing models
 
 **File → Import Model…** turns an OBJ, FBX (binary or ASCII) or COLLADA (`.dae`) model into a

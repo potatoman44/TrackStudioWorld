@@ -35,6 +35,30 @@ pub fn course_base(rel: &str) -> String {
     }
 }
 
+/// The `FilePath` a course file names itself by: `Course/<course>.bcett.json` (data: every
+/// shipped course file, e.g. `Course/Race_FirstCircuit_A_00.bcett.json`).
+pub fn file_path_for(rel: &str) -> String {
+    format!("Course/{}.bcett.json", course_base(rel))
+}
+
+/// A course with no objects or paths, at the place of `location` (a course file's root): its
+/// `AABB` and `FilePath` are kept, so the stage around it is drawn, and the summaries are
+/// emptied.
+pub fn empty_course(location: &Byml) -> Byml {
+    let mut doc = Byml::map();
+    for key in ["AABB", "FilePath"] {
+        if let Some(v) = location.get(key) {
+            doc.insert(key, v.clone());
+        }
+    }
+    doc.insert("Actors", Byml::Array(vec![]));
+    doc.insert("Rails", Byml::Array(vec![]));
+    for key in ["CountActor", "CountRail", "Collects"] {
+        doc.insert(key, Byml::map());
+    }
+    doc
+}
+
 /// The PathAdditionalData file that goes with a course file.
 pub fn pad_rel(rel: &str) -> String {
     format!("Banc/PathAdditionalData/{}.byml", course_base(rel))
@@ -264,6 +288,19 @@ pub(crate) mod tests {
         aabb.insert("Max", Byml::floats(&[6.0, 1.0, 1.0]));
         d.insert("AABB", aabb);
         d
+    }
+
+    #[test]
+    fn empty_courses_keep_their_place() {
+        let mut base = course();
+        base.insert("FilePath", Byml::Str("Course/Test.bcett.json".into()));
+        let e = empty_course(&base);
+        assert!(e.array("Actors").is_empty() && e.array("Rails").is_empty());
+        assert_eq!(e.get("AABB"), base.get("AABB"));
+        assert_eq!(e.get("FilePath"), base.get("FilePath"));
+        assert_eq!(file_path_for("Banc/Race_FirstCircuit_A_00[Game03].bcett.byml.zs"), "Course/Race_FirstCircuit_A_00.bcett.json");
+        // an empty course saves: nothing to fail validation
+        assert!(validate(&e).errors.is_empty());
     }
 
     #[test]
