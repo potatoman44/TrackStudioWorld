@@ -379,6 +379,13 @@ Kirigami.ApplicationWindow {
         onTriggered: viewport.setTopView(!viewport.topView)
     }
     Kirigami.Action {
+        id: importAction
+        text: "Import Model…"
+        icon.name: "document-import"
+        enabled: editor.ready && !editor.busy
+        onTriggered: importDialog.open()
+    }
+    Kirigami.Action {
         id: settingsAction
         text: "Settings…"
         icon.name: "configure"
@@ -413,6 +420,8 @@ Kirigami.ApplicationWindow {
             }
             QQC2.MenuItem { action: saveAction }
             QQC2.MenuItem { action: testAction }
+            QQC2.MenuSeparator {}
+            QQC2.MenuItem { action: importAction }
             QQC2.MenuSeparator {}
             QQC2.MenuItem {
                 text: "Open Mod Folder"
@@ -761,6 +770,12 @@ Kirigami.ApplicationWindow {
     PlaceAlongDialog {
         id: placeDialog
         editor: editor
+    }
+    ImportModelDialog {
+        id: importDialog
+        editor: editor
+        // the new object is the one Q, double-click and Alt+Click add next
+        onImported: (actor) => root.currentAsset = actor
     }
     Kirigami.Dialog {
         id: helpDialog

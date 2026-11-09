@@ -36,7 +36,10 @@ fn load_tex(romfs: &Path, name: &str) -> Option<Tex> {
     Some(Tex { w: img.width, h: img.height, px: img.rgba.as_chunks::<4>().0.to_vec() })
 }
 
-pub fn render(romfs: &Path, rel: &str) -> Result<(), String> {
+/// Render one model's thumbnail, reading it (and its textures) from the first of `roots` that
+/// has it.
+pub fn render(roots: &[PathBuf], rel: &str) -> Result<(), String> {
+    let romfs = roots.iter().find(|r| r.join(rel).is_file()).or(roots.last()).ok_or("no romfs")?.as_path();
     let model = bfres::load(romfs, rel).map_err(|e| e.to_string())?;
     let n = SIZE * SS;
     let mut color = vec![[0u8; 4]; (n * n) as usize];
@@ -132,7 +135,7 @@ pub fn render(romfs: &Path, rel: &str) -> Result<(), String> {
     out.save(&path).map_err(|e| e.to_string())
 }
 
-pub fn render_all(romfs: &Path, jobs: Vec<String>, progress: &(dyn Fn(usize) + Sync)) {
+pub fn render_all(roots: &[PathBuf], jobs: Vec<String>, progress: &(dyn Fn(usize) + Sync)) {
     let queue = Arc::new(Mutex::new(jobs));
     let done = AtomicUsize::new(0);
     let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).saturating_sub(2).clamp(1, 8);
@@ -143,7 +146,7 @@ pub fn render_all(romfs: &Path, jobs: Vec<String>, progress: &(dyn Fn(usize) + S
             s.spawn(move || {
                 loop {
                     let Some(job) = queue.lock().unwrap().pop() else { break };
-                    if let Err(e) = render(romfs, &job) {
+                    if let Err(e) = render(roots, &job) {
                         eprintln!("thumbnail {job}: {e}");
                     }
                     let d = done.fetch_add(1, Ordering::Relaxed) + 1;

@@ -190,6 +190,10 @@ pub mod qobject {
         fn open_folder(self: &Editor, which: &QString);
         #[qinvokable]
         fn build_thumbnails(self: Pin<&mut Editor>);
+        #[qinvokable]
+        fn inspect_model(self: &Editor, path: &QString) -> QString;
+        #[qinvokable]
+        fn import_model(self: Pin<&mut Editor>, path: &QString, name: &QString, label: &QString, scale: f64) -> QString;
     }
 
     // editing tools (copy and paste, path drawing, selection, modal transforms, problems)
@@ -502,9 +506,18 @@ impl qobject::Editor {
     }
 
     fn set_mod_name_from_qml(mut self: Pin<&mut Self>, name: QString) {
+        let changed = self.st().mod_name != name.to_string();
         self.as_mut().stm().mod_name = name.to_string();
         self.as_mut().rust_mut().get_mut().mod_name = name;
-        self.mod_name_changed();
+        self.as_mut().mod_name_changed();
+        if changed {
+            // the mod's custom objects come and go with it
+            let st = self.as_mut().stm();
+            st.refresh_custom();
+            st.rebuild();
+            self.as_mut().bump(Refresh::ALL);
+            self.load_models();
+        }
     }
 
     // ------------------------------------------------------------ startup
@@ -534,7 +547,7 @@ impl qobject::Editor {
                 match res {
                     Ok(cat) => {
                         let n = cat.data.actors.len();
-                        ed.as_mut().stm().cat = Some(Arc::new(cat));
+                        ed.as_mut().stm().set_catalog(Some(Arc::new(cat)));
                         ed.as_mut().log(format!("Game catalog ready: {n} object types ({:.1} s)", took.as_secs_f32()));
                         ed.as_mut().set_ready(true);
                     }
@@ -609,7 +622,7 @@ impl qobject::Editor {
     fn load_models(mut self: Pin<&mut Self>) {
         let wanted = self.st().wanted_models();
         let cache = self.st().models.clone();
-        let romfs = self.st().cfg.romfs.clone();
+        let roots = self.st().roots();
         let stages = self.st().stages.clone();
         let generation = self.st().load_gen;
         self.as_mut().set_models_wanted(wanted.len() as i32);
@@ -634,12 +647,13 @@ impl qobject::Editor {
                     });
                 }
                 if !cache.has(rel) {
-                    match bfres::load(&romfs, rel) {
+                    let romfs = roots.iter().find(|r| r.join(rel).is_file()).unwrap_or(&roots[roots.len() - 1]);
+                    match bfres::load(romfs, rel) {
                         Ok(m) => {
                             let mut names: Vec<String> = m.parts.iter().filter_map(|p| p.texture.clone()).collect();
                             names.sort();
                             names.dedup();
-                            let errors = crate::textures::ensure_all(&romfs, &names);
+                            let errors = crate::textures::ensure_all(&roots, &names);
                             if !errors.is_empty() {
                                 let msg = format!("Model {rel}: {} texture(s) not decoded, first: {}", errors.len(), errors[0]);
                                 let _ = qt.queue(move |ed| ed.log(msg));
@@ -1063,8 +1077,12 @@ impl qobject::Editor {
                 } else {
                     ""
                 };
+                let need_model = cat.actor(&n).and_then(|i| i.model.clone()).is_some_and(|m| !st.models.has(&m));
                 self.as_mut().log(format!("Added {n}{extra}"));
-                self.changed();
+                self.as_mut().changed();
+                if need_model {
+                    self.load_models();
+                }
                 true
             }
             None => false,
@@ -1258,7 +1276,7 @@ impl qobject::Editor {
         self.as_mut().set_mods_path(mods.clone());
         let st = self.as_mut().stm();
         st.cfg = cfg;
-        st.cat = None;
+        st.set_catalog(None);
         st.doc = None;
         st.scene = None;
         self.as_mut().set_ready(false);
@@ -1330,10 +1348,10 @@ impl qobject::Editor {
         self.as_mut().set_thumbs_total(jobs.len() as i32);
         self.as_mut().set_thumbs_done(0);
         let qt = self.qt_thread();
-        let romfs = self.st().cfg.romfs.clone();
+        let roots = self.st().roots();
         std::thread::spawn(move || {
             let qt2 = qt.clone();
-            thumbs::render_all(&romfs, jobs, &move |done| {
+            thumbs::render_all(&roots, jobs, &move |done| {
                 let _ = qt2.queue(move |mut ed| ed.as_mut().set_thumbs_done(done as i32));
             });
             let _ = qt.queue(|mut ed| {
@@ -1341,6 +1359,49 @@ impl qobject::Editor {
                 ed.as_mut().set_revision(v);
             });
         });
+    }
+}
+
+/// Importing models as custom objects.
+impl qobject::Editor {
+    /// What a model file holds (parts, triangles, size, untextured materials), as JSON.
+    fn inspect_model(&self, path: &QString) -> QString {
+        q(self.st().inspect_model(&crate::config::expand(&path.to_string())).to_string())
+    }
+
+    /// Import a model file into the open mod as a new object type. Returns JSON: `ok`, and the
+    /// new type (`actor`) or an `error`.
+    fn import_model(mut self: Pin<&mut Self>, path: &QString, name: &QString, label: &QString, scale: f64) -> QString {
+        let path = crate::config::expand(&path.to_string());
+        self.as_mut().set_busy(true);
+        let res = self.as_mut().stm().import_model(&path, &name.to_string(), &label.to_string(), scale as f32);
+        self.as_mut().set_busy(false);
+        let out = match res {
+            Ok(r) => {
+                let _ = std::fs::remove_file(thumbs::thumb_path(&r.object.model));
+                let st = self.as_mut().stm();
+                st.log(format!(
+                    "Imported {} as {} into mod \"{}\": {} file(s) written{}",
+                    r.object.source,
+                    r.object.actor,
+                    st.mod_name,
+                    r.written.len(),
+                    r.notes.iter().map(|n| format!("; {n}")).collect::<String>()
+                ));
+                json!({"ok": true, "actor": r.object.actor, "label": r.object.label})
+            }
+            Err(e) => {
+                self.as_mut().log(format!("Import failed: {e}"));
+                json!({"ok": false, "error": crate::config::tilde(&e.to_string())})
+            }
+        };
+        self.as_mut().sync_flags();
+        self.as_mut().bump(Refresh::ALL);
+        self.as_mut().load_models();
+        if out["ok"] == true {
+            self.build_thumbnails();
+        }
+        q(out.to_string())
     }
 }
 

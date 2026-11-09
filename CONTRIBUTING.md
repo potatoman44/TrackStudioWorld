@@ -26,6 +26,8 @@ Thanks for helping. A few things keep this project useful and safe to share.
 | `core/src/tools.rs` | Copy and paste, path drawing and reshaping, placing along paths |
 | `core/src/check.rs` | The course checks the Problems panel lists |
 | `core/src/bfres.rs`, `bntx.rs`, `model.rs` | The game's models and textures |
+| `core/src/bfres_write.rs`, `custom.rs` | Writing models from a shipped template, and importing them into a mod as new object types |
+| `core/src/import/` | Reading OBJ, FBX and COLLADA models and their images |
 | `core/src/math.rs`, `raycast.rs`, `scene.rs` | Transforms, picking, what the viewport draws |
 | `app/src/editor.rs` | The QObject QML talks to (CXX-Qt bridge) |
 | `app/src/state.rs` | Editor state behind the bridge, and the JSON the panels show |

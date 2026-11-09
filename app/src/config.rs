@@ -67,11 +67,20 @@ pub fn shell_path(p: &Path) -> String {
 
 /// A path typed into a settings field or given on the command line: `~` and `~/...` expand to
 /// the home folder, relative paths are taken from the current folder, and empty stays empty.
+/// A file URL's path, or `s` as it is. On Windows the path of `file:///C:/x` is `/C:/x`, which
+/// is not absolute there (a folder picker hands it over like that): the drive letter goes first.
+fn url_path(s: &str, windows: bool) -> &str {
+    let s = s.strip_prefix("file://").unwrap_or(s);
+    let b = s.as_bytes();
+    if windows && b.len() > 2 && b[0] == b'/' && b[1].is_ascii_alphabetic() && b[2] == b':' { &s[1..] } else { s }
+}
+
 pub fn expand(s: &str) -> PathBuf {
     let s = s.trim();
     if s.is_empty() {
         return PathBuf::new();
     }
+    let s = url_path(s, cfg!(windows));
     let p = match s.strip_prefix('~') {
         Some("") => home(),
         Some(rest) if rest.starts_with(['/', std::path::MAIN_SEPARATOR]) => {
@@ -217,6 +226,16 @@ mod tests {
         assert!(expand("a~b").ends_with("a~b"));
         assert_eq!(expand("  "), PathBuf::new());
         assert_eq!(expand("/abs"), PathBuf::from("/abs"));
+    }
+
+    #[test]
+    fn file_urls_and_windows_url_paths() {
+        assert_eq!(expand("file:///home/x/romfs"), PathBuf::from("/home/x/romfs"));
+        // what a folder picker hands over on Windows: the drive letter must not get a slash
+        assert_eq!(url_path("/C:/Users/x/romfs", true), "C:/Users/x/romfs");
+        assert_eq!(url_path("file:///C:/Users/x/romfs", true), "C:/Users/x/romfs");
+        assert_eq!(url_path("/C:/x", false), "/C:/x");
+        assert_eq!(url_path("/home/x", true), "/home/x");
     }
 
     #[test]

@@ -146,6 +146,21 @@ game's databases and every course, about 7 s, and caches the result in
 The view has a **top view** (Ctrl+T, orthographic), Alt+drag orbiting, and lit, unlit, normals
 and wireframe shading.
 
+### Importing models
+
+**File → Import Model…** turns an OBJ, FBX (binary or ASCII) or COLLADA (`.dae`) model into a
+new object type in the open mod, listed in Assets under **Custom** and placed like any other
+object. The model is built from a shipped object (a static block wall): it keeps that object's
+shaders, materials and baked lighting and takes the imported geometry and each material's colour
+texture (or colour), up to 6 materials. Files that state their unit (FBX, COLLADA) are converted
+to metres, the game's unit; OBJ files are taken as they are, with a scale in the dialog.
+
+An import writes the model and its textures, adds the object's definitions to the
+`System/GymlArchive` packs that hold the block wall's (the mod gets whole copies of those packs),
+adds a row to `RSDB/Actor`, and adds size table entries for all of them. The mod's imports are
+listed in `<mods>/<mod name>/custom_objects.json`, next to `romfs/`. Importing a name again
+replaces that object. **Imported objects have no collision yet.**
+
 ## Installing a mod
 
 The editor writes a LayeredFS mod to `<mods>/<mod name>/romfs/`.
@@ -166,8 +181,9 @@ The editor writes a LayeredFS mod to `<mods>/<mod name>/romfs/`.
 - Object types never placed in a shipped course get only `IsGridify`, as there is no shipped
   placement to copy their other fields from.
 - Reversing a path doesn't rewire the links at its ends.
-- No model import, collision, camera, minimap or lighting editing. Course geometry is BFRES
-  with Havok collision, and the open world is generated from heightmaps.
+- Imported models have no collision (Havok `.bphsh` shapes are not written yet), share one
+  baked-lighting value, and are limited to 6 materials. No camera, minimap or lighting editing;
+  the open world is generated from heightmaps.
 - Models are drawn with their albedo texture only, at the most detailed level of detail;
   skinned models show in their bind pose.
 

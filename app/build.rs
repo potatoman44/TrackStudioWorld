@@ -11,6 +11,7 @@ fn main() {
         "qml/Gizmo.qml",
         "qml/GizmoHandle.qml",
         "qml/HelpPanel.qml",
+        "qml/ImportModelDialog.qml",
         "qml/LineModel.qml",
         "qml/Main.qml",
         "qml/MeshPart.qml",

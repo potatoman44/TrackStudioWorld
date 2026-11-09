@@ -256,6 +256,222 @@ pub fn load(romfs: &Path, name: &str, max_size: u32) -> Result<Image> {
     decode(&d, t, max_size)
 }
 
+// ---------------------------------------------------------------------------------------------
+// Writing
+
+/// nn::gfx `R8_G8_B8_A8_SRGB`: colour textures.
+pub const FORMAT_RGBA8_SRGB: u32 = 0x0b06;
+/// nn::gfx `R8_G8_B8_A8_UNORM`: data textures (normals, material masks).
+pub const FORMAT_RGBA8_UNORM: u32 = 0x0b01;
+
+/// Row-major bytes to a block-linear surface: the inverse of [`untile`]. The result is padded to
+/// whole blocks of `block_height` GOBs.
+fn tile(lin: &[u8], width_bytes: usize, rows: usize, block_height: usize, orin: bool) -> Vec<u8> {
+    let gobs_wide = width_bytes.div_ceil(64);
+    let block_bytes = 512 * block_height;
+    let blocks_tall = rows.div_ceil(8 * block_height);
+    let mut out = vec![0u8; gobs_wide * blocks_tall * block_bytes];
+    for y in 0..rows {
+        let row_base = (y / (8 * block_height)) * gobs_wide * block_bytes + ((y % (8 * block_height)) / 8) * 512;
+        for x in (0..width_bytes).step_by(16) {
+            let dst = row_base + (x / 64) * block_bytes + gob_offset(x % 64, y % 8, orin);
+            let n = 16.min(width_bytes - x);
+            out[dst..dst + n].copy_from_slice(&lin[y * width_bytes + x..y * width_bytes + x + n]);
+        }
+    }
+    out
+}
+
+/// log2 of the block height (in GOBs) the game's files use for a surface `rows` blocks tall:
+/// the smallest power of two covering the rows, at most 16 GOBs.
+fn block_height_log2(rows: u32) -> u32 {
+    let gobs = rows.div_ceil(8).clamp(1, 16);
+    gobs.next_power_of_two().trailing_zeros()
+}
+
+/// Halve an RGBA8 image with a box filter (odd sizes keep their last row or column). Colour
+/// textures are averaged in linear light.
+pub(crate) fn half_size(img: &Image, srgb: bool) -> Image {
+    let (w, h) = ((img.width / 2).max(1), (img.height / 2).max(1));
+    let to_lin = |c: u8| if srgb { (c as f32 / 255.0).powf(2.2) } else { c as f32 / 255.0 };
+    let from_lin = |v: f32| ((if srgb { v.powf(1.0 / 2.2) } else { v }) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            let mut sum = [0f32; 4];
+            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                let sx = (2 * x + dx).min(img.width - 1);
+                let sy = (2 * y + dy).min(img.height - 1);
+                let i = ((sy * img.width + sx) * 4) as usize;
+                for (c, s) in sum.iter_mut().take(3).enumerate() {
+                    *s += to_lin(img.rgba[i + c]);
+                }
+                sum[3] += img.rgba[i + 3] as f32 / 255.0;
+            }
+            rgba.extend([from_lin(sum[0] / 4.0), from_lin(sum[1] / 4.0), from_lin(sum[2] / 4.0), (sum[3] / 4.0 * 255.0 + 0.5) as u8]);
+        }
+    }
+    Image { width: w, height: h, rgba }
+}
+
+/// The patricia-trie bit a one-entry `_DIC` stores for `name`: the first set bit, counting from
+/// the least significant bit of the last byte.
+pub(crate) fn dict_bit(name: &str) -> u32 {
+    let b = name.as_bytes();
+    (0..b.len() as u32 * 8).find(|&i| (b[b.len() - 1 - (i / 8) as usize] >> (i % 8)) & 1 == 1).unwrap_or(0)
+}
+
+/// A Switch 2 (`Ounc`) BNTX file holding one uncompressed RGBA8 texture with a full mip chain,
+/// laid out the way the game's own files are: the `_STR` block (strings and the one-entry
+/// `_DIC`) after the platform header, `BRTI` up to 0x3F0, `BRTD` at 0x3F0 with the image at
+/// 0x400, then the relocation table.
+///
+/// `format` is [`FORMAT_RGBA8_SRGB`] or [`FORMAT_RGBA8_UNORM`]; names are limited to 64 bytes so
+/// the texture info fits before 0x3F0.
+pub fn write(name: &str, image: &Image, format: u32) -> Result<Vec<u8>> {
+    if name.is_empty() || name.len() > 64 {
+        return Err(format!("BNTX: texture name {name:?} must be 1 to 64 bytes").into());
+    }
+    if image.width == 0 || image.height == 0 || image.rgba.len() != (image.width * image.height * 4) as usize {
+        return Err("BNTX: bad image size".into());
+    }
+    let srgb = format & 0xff == 6;
+    let mut mips = vec![image.clone()];
+    while mips.len() < 16 {
+        let last = mips.last().unwrap();
+        if last.width == 1 && last.height == 1 {
+            break;
+        }
+        mips.push(half_size(last, srgb));
+    }
+    let bh_log2 = block_height_log2(image.height);
+    let mut surfaces = vec![];
+    for m in &mips {
+        let mut bh = 1usize << bh_log2;
+        while bh > 1 && (m.height as usize) <= (bh / 2) * 8 {
+            bh /= 2;
+        }
+        surfaces.push(tile(&m.rgba, m.width as usize * 4, m.height as usize, bh, true));
+    }
+    let image_size: usize = surfaces.iter().map(Vec::len).sum();
+
+    // strings: count, the empty string, then the name
+    let str_at = 0x60usize;
+    let empty_at = str_at + 0x14;
+    let name_at = str_at + 0x18;
+    let dic_at = (name_at + 2 + name.len() + 1).next_multiple_of(8);
+    let brti = dic_at + 0x28;
+    let mip_table = brti + 0x2a0;
+    let brtd = 0x3f0usize;
+    if mip_table + 8 * mips.len() > brtd {
+        return Err("BNTX: texture name too long".into());
+    }
+    let data_at = brtd + 0x10;
+    let rlt = data_at + image_size;
+    let file_size = rlt + 0x78;
+
+    let mut d = vec![0u8; file_size];
+    let put = |d: &mut Vec<u8>, o: usize, b: &[u8]| d[o..o + b.len()].copy_from_slice(b);
+    let u16le = |d: &mut Vec<u8>, o: usize, v: u16| d[o..o + 2].copy_from_slice(&v.to_le_bytes());
+    let u32le = |d: &mut Vec<u8>, o: usize, v: u32| d[o..o + 4].copy_from_slice(&v.to_le_bytes());
+    let u64le = |d: &mut Vec<u8>, o: usize, v: usize| d[o..o + 8].copy_from_slice(&(v as u64).to_le_bytes());
+
+    // file header
+    put(&mut d, 0, b"BNTX\0\0\0\0");
+    put(&mut d, 8, &[0x01, 0x01, 0x04, 0x00, 0xff, 0xfe, 0x09, 0x40]);
+    u32le(&mut d, 0x10, (name_at + 2) as u32);
+    u16le(&mut d, 0x16, str_at as u16);
+    u32le(&mut d, 0x18, rlt as u32);
+    u32le(&mut d, 0x1c, file_size as u32);
+    // platform header
+    put(&mut d, 0x20, b"Ounc");
+    u32le(&mut d, 0x24, 1);
+    u64le(&mut d, 0x28, 0x58);
+    u64le(&mut d, 0x30, brtd);
+    u64le(&mut d, 0x38, dic_at);
+    u64le(&mut d, 0x58, brti);
+    // _STR (its size runs to the texture info, so it holds the _DIC too)
+    put(&mut d, str_at, b"_STR");
+    u32le(&mut d, str_at + 4, (brti - str_at) as u32);
+    u32le(&mut d, str_at + 8, (brti - str_at) as u32);
+    u32le(&mut d, str_at + 0x10, 1);
+    u16le(&mut d, name_at, name.len() as u16);
+    put(&mut d, name_at + 2, name.as_bytes());
+    // _DIC: the root node, then the texture's
+    put(&mut d, dic_at, b"_DIC");
+    u32le(&mut d, dic_at + 4, 1);
+    u32le(&mut d, dic_at + 8, u32::MAX);
+    u16le(&mut d, dic_at + 0xc, 1);
+    u64le(&mut d, dic_at + 0x10, empty_at);
+    u32le(&mut d, dic_at + 0x18, dict_bit(name));
+    u16le(&mut d, dic_at + 0x1e, 1);
+    u64le(&mut d, dic_at + 0x20, name_at);
+    // BRTI
+    put(&mut d, brti, b"BRTI");
+    u32le(&mut d, brti + 4, (brtd - brti) as u32);
+    u32le(&mut d, brti + 8, (brtd - brti) as u32);
+    put(&mut d, brti + 0x10, &[0x09, 0x02]);
+    u16le(&mut d, brti + 0x16, mips.len() as u16);
+    u32le(&mut d, brti + 0x18, 1);
+    u32le(&mut d, brti + 0x1c, format);
+    u32le(&mut d, brti + 0x20, 0x21);
+    u32le(&mut d, brti + 0x24, image.width);
+    u32le(&mut d, brti + 0x28, image.height);
+    u32le(&mut d, brti + 0x2c, 1);
+    u32le(&mut d, brti + 0x30, 1);
+    u32le(&mut d, brti + 0x34, bh_log2);
+    u32le(&mut d, brti + 0x38, 0x0001_00c9);
+    u32le(&mut d, brti + 0x50, image_size as u32);
+    u32le(&mut d, brti + 0x54, 0x200);
+    put(&mut d, brti + 0x58, &[2, 3, 4, 5]);
+    u32le(&mut d, brti + 0x5c, 1);
+    u64le(&mut d, brti + 0x60, name_at);
+    u64le(&mut d, brti + 0x68, 0x20);
+    u64le(&mut d, brti + 0x70, mip_table);
+    u64le(&mut d, brti + 0x80, brti + 0xa0);
+    u64le(&mut d, brti + 0x88, brti + 0x1a0);
+    // BRTD and the image
+    put(&mut d, brtd, b"BRTD");
+    u64le(&mut d, brtd + 8, image_size + 0x10);
+    let mut at = data_at;
+    for (i, s) in surfaces.iter().enumerate() {
+        u64le(&mut d, mip_table + 8 * i, at);
+        put(&mut d, at, s);
+        at += s.len();
+    }
+    // relocation table: section 0 the headers and texture info, section 1 the image (pointers
+    // to it are relocated against its base)
+    let r = rlt;
+    put(&mut d, r, b"_RLT");
+    u32le(&mut d, r + 4, rlt as u32);
+    u32le(&mut d, r + 8, 2);
+    // sections: (pointer, offset, size, first entry, entry count)
+    u32le(&mut d, r + 0x1c, (mip_table + 8 * mips.len()) as u32);
+    u32le(&mut d, r + 0x24, 5);
+    u32le(&mut d, r + 0x30, brtd as u32);
+    u32le(&mut d, r + 0x34, (image_size + 0x10) as u32);
+    u32le(&mut d, r + 0x38, 5);
+    u32le(&mut d, r + 0x3c, 2);
+    // entries: (offset, struct count, pointers per struct, u64s skipped after them)
+    let entries: [(usize, u16, u8, u8); 7] = [
+        (0x28, 2, 1, 1),                                    // texture info array, _DIC
+        (0x58, 2, 1, (dic_at + 0x10 - 0x58 - 8) as u8 / 8), // the texture info pointer, the root node's name
+        (dic_at + 0x20, 1, 1, 0),                           // the texture node's name
+        (brti + 0x60, 1, 3, 0),                             // name, platform header, mip table
+        (brti + 0x80, 1, 2, 0),                             // runtime texture and view
+        (0x30, 1, 1, 0),                                    // BRTD
+        (mip_table, 1, mips.len() as u8, 0),
+    ];
+    for (i, (o, sc, oc, pc)) in entries.iter().enumerate() {
+        let e = r + 0x40 + 8 * i;
+        u32le(&mut d, e, *o as u32);
+        u16le(&mut d, e + 4, *sc);
+        d[e + 6] = *oc;
+        d[e + 7] = *pc;
+    }
+    Ok(d)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,5 +504,48 @@ mod tests {
         }
         let lin = untile(&tiled, 16, 16, 2, true);
         assert!(lin.iter().enumerate().all(|(i, &b)| b == i as u8));
+    }
+    #[test]
+    fn tile_inverts_untile() {
+        let (w, rows) = (200usize, 37usize);
+        let lin: Vec<u8> = (0..w * rows).map(|i| (i * 7 % 251) as u8).collect();
+        for bh in [1, 2, 4, 8, 16] {
+            let tiled = tile(&lin, w, rows, bh, true);
+            assert_eq!(untile(&tiled, w, rows, bh, true), lin, "block height {bh}");
+        }
+    }
+
+    #[test]
+    fn block_heights_match_shipped_files() {
+        // 512 rows of BC1 blocks (128), ASTC 8x8 (64), 256-texel ASTC 8x8 (32), 16-texel BC3 (4)
+        assert_eq!([128, 64, 32, 4].map(block_height_log2), [4, 3, 2, 0]);
+    }
+
+    #[test]
+    fn written_texture_reads_back() {
+        let (w, h) = (100u32, 60u32);
+        let rgba: Vec<u8> = (0..w * h).flat_map(|i| [(i % 251) as u8, (i / 7 % 256) as u8, 200, 255]).collect();
+        let img = Image { width: w, height: h, rgba: rgba.clone() };
+        let d = write("Imported_Test_Alb", &img, FORMAT_RGBA8_SRGB).unwrap();
+        let t = parse(&d).unwrap();
+        assert_eq!(t.len(), 1);
+        let t = &t[0];
+        assert_eq!((t.name.as_str(), t.width, t.height, t.format, t.mip_count), ("Imported_Test_Alb", w, h, FORMAT_RGBA8_SRGB, 7));
+        assert!(t.orin);
+        let back = decode(&d, t, 4096).unwrap();
+        assert_eq!(back.rgba, rgba);
+        let small = decode(&d, t, 1).unwrap();
+        assert_eq!((small.width, small.height), (1, 1));
+        // relocation table and file size agree with the header
+        let rlt = u32::from_le_bytes(d[0x18..0x1c].try_into().unwrap()) as usize;
+        assert_eq!(&d[rlt..rlt + 4], b"_RLT");
+        assert_eq!(u32::from_le_bytes(d[0x1c..0x20].try_into().unwrap()) as usize, d.len());
+    }
+
+    #[test]
+    fn dict_bits() {
+        // matches the shipped CmnTex_Replace_Map_Soil_Replace_Soil.bntx (last byte 'l' = 0x6C)
+        assert_eq!(dict_bit("CmnTex_Replace_Map_Soil_Replace_Soil"), 2);
+        assert_eq!(dict_bit("a"), 0);
     }
 }

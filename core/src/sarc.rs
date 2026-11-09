@@ -58,6 +58,69 @@ pub fn read(data: &[u8]) -> Result<BTreeMap<String, Vec<u8>>> {
     Ok(out)
 }
 
+/// The SARC name hash (multiplier 0x65, bytes as signed chars).
+pub fn name_hash(name: &str) -> u32 {
+    name.bytes().fold(0u32, |h, c| h.wrapping_mul(0x65).wrapping_add(c as i8 as i32 as u32))
+}
+
+/// Write an archive the way the game's `System/GymlArchive` packs are laid out: entries sorted
+/// by name hash, names 4-aligned, the data starting on a 0x100 boundary with every file
+/// 0x100-aligned (the alignment of every file in the shipped packs).
+pub fn write(files: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>> {
+    const ALIGN: usize = 0x100;
+    let mut order: Vec<(&String, &Vec<u8>)> = files.iter().collect();
+    order.sort_by_key(|(n, _)| name_hash(n));
+    if order.windows(2).any(|w| name_hash(w[0].0) == name_hash(w[1].0)) {
+        return Err("SARC: two file names have the same hash".into());
+    }
+    if order.len() > u16::MAX as usize {
+        return Err("SARC: too many files".into());
+    }
+    let mut names = vec![];
+    let mut name_offs = vec![];
+    for (n, _) in &order {
+        name_offs.push(names.len() / 4);
+        names.extend_from_slice(n.as_bytes());
+        names.push(0);
+        names.resize(names.len().next_multiple_of(4), 0);
+    }
+    let sfat = 0x14;
+    let sfnt = sfat + 0x0C + 16 * order.len();
+    let data_off = (sfnt + 8 + names.len()).next_multiple_of(ALIGN);
+    let mut blob = vec![];
+    let mut ranges = vec![];
+    for (_, d) in &order {
+        blob.resize(blob.len().next_multiple_of(ALIGN), 0);
+        ranges.push((blob.len(), blob.len() + d.len()));
+        blob.extend_from_slice(d);
+    }
+    let mut out = Vec::with_capacity(data_off + blob.len());
+    out.extend_from_slice(b"SARC");
+    out.extend_from_slice(&0x14u16.to_le_bytes());
+    out.extend_from_slice(&0xFEFFu16.to_le_bytes());
+    out.extend_from_slice(&((data_off + blob.len()) as u32).to_le_bytes());
+    out.extend_from_slice(&(data_off as u32).to_le_bytes());
+    out.extend_from_slice(&0x0100u16.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out.extend_from_slice(b"SFAT");
+    out.extend_from_slice(&0x0Cu16.to_le_bytes());
+    out.extend_from_slice(&(order.len() as u16).to_le_bytes());
+    out.extend_from_slice(&0x65u32.to_le_bytes());
+    for (i, (n, _)) in order.iter().enumerate() {
+        out.extend_from_slice(&name_hash(n).to_le_bytes());
+        out.extend_from_slice(&(0x0100_0000u32 | name_offs[i] as u32).to_le_bytes());
+        out.extend_from_slice(&(ranges[i].0 as u32).to_le_bytes());
+        out.extend_from_slice(&(ranges[i].1 as u32).to_le_bytes());
+    }
+    out.extend_from_slice(b"SFNT");
+    out.extend_from_slice(&8u16.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out.extend_from_slice(&names);
+    out.resize(data_off, 0);
+    out.extend_from_slice(&blob);
+    Ok(out)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -133,5 +196,19 @@ pub(crate) mod tests {
             bad[i] ^= 0xFF;
             let _ = read(&bad);
         }
+    }
+    #[test]
+    fn written_archives_read_back_sorted_by_hash() {
+        let mut files = BTreeMap::new();
+        files.insert("Gyml/B.bgyml".to_string(), b"world!!".to_vec());
+        files.insert("Gyml/A.bgyml".to_string(), b"hello".to_vec());
+        files.insert("Gyml/Long/Name.bgyml".to_string(), vec![7; 300]);
+        let sarc = write(&files).unwrap();
+        assert_eq!(read(&sarc).unwrap(), files);
+        let hashes: Vec<u32> = (0..3).map(|i| u32::from_le_bytes(sarc[0x20 + 16 * i..0x24 + 16 * i].try_into().unwrap())).collect();
+        assert!(hashes.windows(2).all(|w| w[0] < w[1]));
+        // names hash the way the shipped packs do (checked against actor_general_format)
+        assert_eq!(name_hash("a"), 0x61);
+        assert_eq!(name_hash("ab"), 0x61 * 0x65 + 0x62);
     }
 }

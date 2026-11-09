@@ -9,17 +9,21 @@
 //!   reshaping, placing along paths; [`checkpoints`]: lap checkpoint numbering; [`check`]: the
 //!   course checks the Problems panel lists.
 //! * [`bfres`], [`bntx`], [`model`]: the game's models and textures, read from the romfs.
+//! * [`import`]: OBJ, COLLADA and FBX models and their images, from other tools.
 //! * [`math`], [`raycast`], [`scene`]: transforms, picking and what the viewport draws.
 
 pub mod banc;
 pub mod bfres;
+pub mod bfres_write;
 pub mod bntx;
 pub mod byml;
 pub mod catalog;
 pub mod check;
 pub mod checkpoints;
+pub mod custom;
 pub mod doc;
 pub mod error;
+pub mod import;
 pub mod io;
 pub mod math;
 pub mod model;

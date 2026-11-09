@@ -57,7 +57,8 @@ Kirigami.Dialog {
     FolderDialog {
         id: picker
         property var target
-        onAccepted: target.text = decodeURIComponent(selectedFolder.toString().replace("file://", ""))
+        // "file:///C:/x" on Windows: keep the drive letter at the start
+        onAccepted: target.text = decodeURIComponent(selectedFolder.toString()).replace(/^file:\/\//, "").replace(/^\/([A-Za-z]:)/, "$1")
     }
     ColumnLayout {
         Kirigami.InlineMessage {

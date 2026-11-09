@@ -19,9 +19,11 @@ pub fn cached(name: &str) -> Option<PathBuf> {
     p.is_file().then_some(p)
 }
 
-/// Make sure the texture's PNG is cached and not older than the romfs file.
-pub fn ensure(romfs: &Path, name: &str) -> Result<PathBuf, String> {
+/// Make sure the texture's PNG is cached and not older than its file, read from the first of
+/// `roots` (the open mod's romfs, then the game's) that has it.
+pub fn ensure(roots: &[PathBuf], name: &str) -> Result<PathBuf, String> {
     let png = png_path(name);
+    let romfs = roots.iter().find(|r| mkwtrack::bntx::texture_path(r, name).is_file()).or(roots.last()).ok_or("no romfs")?;
     let src = mkwtrack::bntx::texture_path(romfs, name);
     let modified = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
     if let (Some(a), Some(b)) = (modified(&png), modified(&src))
@@ -39,7 +41,7 @@ pub fn ensure(romfs: &Path, name: &str) -> Result<PathBuf, String> {
 }
 
 /// [`ensure`] for many textures on worker threads; returns the errors.
-pub fn ensure_all(romfs: &Path, names: &[String]) -> Vec<String> {
+pub fn ensure_all(roots: &[PathBuf], names: &[String]) -> Vec<String> {
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).saturating_sub(1).clamp(1, 8);
     let next = std::sync::atomic::AtomicUsize::new(0);
     let errors = std::sync::Mutex::new(vec![]);
@@ -47,7 +49,7 @@ pub fn ensure_all(romfs: &Path, names: &[String]) -> Vec<String> {
         for _ in 0..threads.min(names.len()) {
             s.spawn(|| {
                 while let Some(name) = names.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
-                    if let Err(e) = ensure(romfs, name) {
+                    if let Err(e) = ensure(roots, name) {
                         errors.lock().unwrap().push(format!("Texture {name}: {e}"));
                     }
                 }

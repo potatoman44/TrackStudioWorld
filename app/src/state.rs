@@ -71,7 +71,12 @@ fn snap_to(v: f32, step: f32) -> f32 {
 
 pub struct State {
     pub cfg: Config,
+    /// the game's catalog plus the open mod's custom objects
     pub cat: Option<Arc<Catalog>>,
+    /// the game's catalog as read from the romfs
+    pub base_cat: Option<Arc<Catalog>>,
+    /// custom objects imported into the open mod
+    pub custom: Vec<mkwtrack::custom::CustomObject>,
     pub doc: Option<Document>,
     pub selection: Vec<u64>,
     pub view: ViewOptions,
@@ -126,6 +131,8 @@ impl State {
             mod_name: "MyTrackMod".into(),
             cfg,
             cat: None,
+            base_cat: None,
+            custom: vec![],
             doc: None,
             selection: vec![],
             view: ViewOptions { models: true, ..Default::default() },
@@ -164,6 +171,106 @@ impl State {
 
     pub fn ws(&self) -> Workspace {
         Workspace { romfs: self.cfg.romfs.clone(), mods_root: self.cfg.mods.clone() }
+    }
+
+    /// The open mod's folder (`<mods>/<mod>`; its files are in `romfs/` inside).
+    pub fn mod_dir(&self) -> std::path::PathBuf {
+        self.cfg.mods.join(&self.mod_name)
+    }
+
+    /// Where models and textures are read from: the open mod first, then the game.
+    pub fn roots(&self) -> Vec<std::path::PathBuf> {
+        vec![self.mod_dir().join("romfs"), self.cfg.romfs.clone()]
+    }
+
+    /// Set the game's catalog and add the open mod's custom objects to it.
+    pub fn set_catalog(&mut self, cat: Option<Arc<Catalog>>) {
+        self.base_cat = cat;
+        self.refresh_custom();
+    }
+
+    /// Re-read the open mod's custom objects into the catalog (after an import, or when the
+    /// mod changes). They are listed under their own "Custom" category.
+    pub fn refresh_custom(&mut self) {
+        let Some(base) = self.base_cat.clone() else {
+            self.cat = None;
+            self.custom.clear();
+            return;
+        };
+        self.custom = if mkwtrack::workspace::valid_mod_name(&self.mod_name) {
+            mkwtrack::custom::read_manifest(&self.mod_dir()).objects
+        } else {
+            vec![]
+        };
+        if self.custom.is_empty() {
+            self.cat = Some(base);
+            return;
+        }
+        let mut data = base.data.clone();
+        for (name, mut info) in mkwtrack::custom::catalog_entries(&base, &self.custom) {
+            info.category = "Custom".into();
+            data.actors.insert(name, info);
+        }
+        self.cat = Some(Arc::new(Catalog { data, romfs: base.romfs.clone() }));
+    }
+
+    /// What a model file holds, for the import dialog: parts, triangles, size and textures.
+    pub fn inspect_model(&self, path: &std::path::Path) -> Value {
+        match mkwtrack::import::load(path) {
+            Ok(m) => {
+                let (mn, mx) = m.bounds();
+                let missing: Vec<String> = m.parts.iter().filter(|p| p.texture.is_none()).map(|p| p.name.clone()).collect();
+                let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+                let mut name: String = stem.chars().filter(|c| c.is_ascii_alphanumeric()).take(24).collect();
+                if !name.starts_with(|c: char| c.is_ascii_alphabetic()) {
+                    name = format!("M{name}").chars().take(24).collect();
+                }
+                json!({"ok": true, "parts": m.parts.len(), "triangles": m.triangle_count(),
+                       "size": [mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2]], "untextured": missing, "name": name, "label": stem})
+            }
+            Err(e) => json!({"ok": false, "error": e.to_string()}),
+        }
+    }
+
+    /// Import a model file as a custom object into the open mod.
+    pub fn import_model(
+        &mut self,
+        path: &std::path::Path,
+        name: &str,
+        label: &str,
+        scale: f32,
+    ) -> mkwtrack::Result<mkwtrack::custom::Imported> {
+        if !mkwtrack::workspace::valid_mod_name(&self.mod_name) {
+            return Err(format!("\"{}\" is not a usable mod name", self.mod_name).into());
+        }
+        let model = mkwtrack::import::load(path)?;
+        let mut parts = vec![];
+        for p in model.parts {
+            let image = match &p.texture {
+                Some(t) => match mkwtrack::import::load_image(t) {
+                    Ok((width, height, rgba)) => Some(mkwtrack::bntx::Image { width, height, rgba }),
+                    Err(e) => {
+                        self.log(format!("Texture {}: {e} (using the material colour)", t.display()));
+                        None
+                    }
+                },
+                None => None,
+            };
+            let mesh = mkwtrack::bfres_write::Mesh {
+                positions: p.positions.iter().map(|v| v.map(|x| x * scale)).collect(),
+                normals: p.normals,
+                uvs: p.uvs,
+                indices: p.indices,
+            };
+            parts.push(mkwtrack::custom::ImportPart { mesh, image, color: p.color });
+        }
+        let source = path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let label = if label.trim().is_empty() { name } else { label.trim() };
+        let res = mkwtrack::custom::import(&self.cfg.romfs, &self.mod_dir(), name, label, &source, parts)?;
+        self.models.map.lock().unwrap().remove(&res.object.model);
+        self.refresh_custom();
+        self.rebuild();
+        Ok(res)
     }
 
     /// The catalog cache folder, one per romfs path.
@@ -216,8 +323,11 @@ impl State {
         self.view.hidden_rails.clear();
         self.ground = None;
         self.load_gen += 1;
-        if let Some(m) = m.filter(|m| !m.is_empty()) {
+        if let Some(m) = m.filter(|m| !m.is_empty())
+            && self.mod_name != m
+        {
             self.mod_name = m.to_string();
+            self.refresh_custom();
         }
         self.rebuild();
         let d = self.doc.as_ref().unwrap();
