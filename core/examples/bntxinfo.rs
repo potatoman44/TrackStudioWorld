@@ -11,7 +11,7 @@ fn main() {
             let img = bntx::decode(&data, &tex, 4096).expect("decode");
             let n = (img.width * img.height) as f64;
             let mut sum = [0f64; 4];
-            for px in img.rgba.chunks_exact(4) {
+            for px in img.rgba.as_chunks::<4>().0 {
                 for c in 0..4 {
                     sum[c] += px[c] as f64;
                 }
