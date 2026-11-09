@@ -1369,14 +1369,16 @@ impl State {
             .actors
             .iter()
             .filter(|(n, a)| {
-                (!placed_only || a.placed || favs_only)
+                // custom objects are never in a shipped course, but always belong in the list
+                (!placed_only || a.placed || favs_only || a.category == "Custom")
                     && (!favs_only || favorites.contains(n.as_str()))
                     && (category.is_empty() || a.category == category)
                     && (f.is_empty() || n.to_lowercase().contains(&f) || a.label.to_lowercase().contains(&f))
             })
             .map(|(n, a)| (in_doc.contains(n.as_str()), n, a))
             .collect();
-        out.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(b.1)));
+        // in the course first, then the mod's custom objects, then by name
+        out.sort_by(|a, b| b.0.cmp(&a.0).then((b.2.category == "Custom").cmp(&(a.2.category == "Custom"))).then(a.1.cmp(b.1)));
         json!(out.iter().take(600).map(|(here, n, a)| {
             json!({"name": n, "short": short_name(n), "label": a.label, "category": a.category, "model": a.model.is_some(), "inCourse": here, "fav": favorites.contains(n.as_str()),
                    "color": scene::hex(scene::category_color(&a.category)), "thumb": thumb_url(Some(a))})
