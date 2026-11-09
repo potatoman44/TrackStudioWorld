@@ -826,7 +826,7 @@ impl qobject::Editor {
             ("normals", vec3_list(&p.normals)),
             ("uvs", QVariant::from(&uvs)),
             ("indexes", QVariant::from(&idx)),
-            ("texture", QVariant::from(&q(tex.map(|t| crate::config::file_url(&t)).unwrap_or_default()))),
+            ("texture", QVariant::from(&q(tex.map(|t| crate::config::versioned_url(&t)).unwrap_or_default()))),
             ("cutout", QVariant::from(&p.cutout)),
             ("alphaCutoff", QVariant::from(&p.alpha_cutoff)),
         ])

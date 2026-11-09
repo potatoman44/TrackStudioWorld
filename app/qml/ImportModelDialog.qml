@@ -31,13 +31,24 @@ Kirigami.Dialog {
         onAccepted: dlg.accept()
         onRejected: dlg.reject()
     }
-    onOpened: error = ""
 
+    // names of the custom objects already in the mod
+    property var taken: []
+    readonly property bool replacing: taken.indexOf(name.text) >= 0
+    onOpened: {
+        error = "";
+        taken = JSON.parse(editor.customObjects()).map((o) => o.name);
+    }
     function inspect() {
         info = file.text.length > 0 ? JSON.parse(editor.inspectModel(file.text)) : {};
         if (info.ok === true) {
-            if (name.text.length === 0)
-                name.text = info.name;
+            // a free name: "Untitled", "Untitled2", ...
+            if (name.text.length === 0) {
+                let n = info.name, k = 2;
+                while (taken.indexOf(n) >= 0)
+                    n = info.name.substring(0, 22) + (k++);
+                name.text = n;
+            }
             if (label.text.length === 0)
                 label.text = info.label;
         }
@@ -79,6 +90,12 @@ Kirigami.Dialog {
             visible: dlg.error.length > 0
             type: Kirigami.MessageType.Error
             text: dlg.error
+        }
+        Kirigami.InlineMessage {
+            Layout.fillWidth: true
+            visible: dlg.replacing
+            type: Kirigami.MessageType.Warning
+            text: "The mod already has an object called \"" + name.text + "\". Importing replaces it (and every placed copy of it). Change the name to add a new one."
         }
         Kirigami.InlineMessage {
             Layout.fillWidth: true

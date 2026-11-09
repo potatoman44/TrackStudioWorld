@@ -278,7 +278,7 @@ impl State {
                         .enumerate()
                         .map(|(i, m)| {
                             let img = mkwtrack::custom::material_image(&dir, &o.name, &o.settings, i);
-                            json!({"name": m.name, "image": img.map(|p| crate::config::file_url(&p)).unwrap_or_default(), "settings": m})
+                            json!({"name": m.name, "image": img.map(|p| crate::config::versioned_url(&p)).unwrap_or_default(), "settings": m})
                         })
                         .collect();
                     json!({"name": o.name, "label": o.label, "actor": o.actor, "model": o.model, "source": o.source, "aabb": o.aabb,
@@ -1487,7 +1487,7 @@ impl State {
 /// file:// URL of the object's cached thumbnail, or "" when it has no model or none is built yet.
 fn thumb_url(info: Option<&ActorInfo>) -> String {
     let Some(p) = info.and_then(|i| i.model.as_ref()).map(|m| crate::thumbs::thumb_path(m)) else { return String::new() };
-    if p.exists() { crate::config::file_url(&p) } else { String::new() }
+    if p.exists() { crate::config::versioned_url(&p) } else { String::new() }
 }
 
 pub fn short_name(n: &str) -> String {

@@ -126,6 +126,17 @@ pub fn file_url(p: &Path) -> String {
     if s.starts_with('/') { format!("file://{s}") } else { format!("file:///{s}") }
 }
 
+/// [`file_url`] with the file's modification time as a query, so a file rewritten in place
+/// (a re-imported or rebuilt model's textures and thumbnail) is not shown from Qt's cache.
+pub fn versioned_url(p: &Path) -> String {
+    let t = std::fs::metadata(p)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_millis());
+    format!("{}?v={t}", file_url(p))
+}
+
 impl Config {
     /// The saved settings, then the command line on top. Exits on `--help`, `--version` or a
     /// bad command line.
