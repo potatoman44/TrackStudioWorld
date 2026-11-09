@@ -324,6 +324,7 @@ pub struct EditorRust {
     error_count: i32,
     warning_count: i32,
     selection_count: i32,
+    custom_revision: i32,
     st: State,
 }
 
@@ -364,6 +365,7 @@ impl Default for EditorRust {
             error_count: 0,
             warning_count: 0,
             selection_count: 0,
+            custom_revision: 0,
             st: State::new(cfg),
         }
     }
