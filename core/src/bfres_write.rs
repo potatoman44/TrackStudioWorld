@@ -186,7 +186,7 @@ fn encode(out: &mut [u8], format: u32, v: [f32; 4]) -> Result<()> {
 pub fn tangents(m: &Mesh) -> Vec<[f32; 3]> {
     use glam::Vec3;
     let mut acc = vec![Vec3::ZERO; m.positions.len()];
-    for t in m.indices.chunks_exact(3) {
+    for t in m.indices.as_chunks::<3>().0 {
         let [a, b, c] = [t[0] as usize, t[1] as usize, t[2] as usize];
         if a.max(b).max(c) >= m.positions.len() || a.max(b).max(c) >= m.uvs.len() {
             continue;

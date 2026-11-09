@@ -155,8 +155,14 @@ fn set_xyz(m: &mut Byml, key: &str, v: [f32; 3]) {
 /// The texel of a baked-lighting texture to light every imported vertex with: the one at the
 /// 75th percentile of brightness (lit, but not a highlight), as a UV at its centre.
 fn bake_texel(img: &Image) -> [f32; 2] {
-    let mut lum: Vec<(u32, usize)> =
-        img.rgba.chunks_exact(4).enumerate().map(|(i, p)| (p[0] as u32 * 2126 + p[1] as u32 * 7152 + p[2] as u32 * 722, i)).collect();
+    let mut lum: Vec<(u32, usize)> = img
+        .rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p[0] as u32 * 2126 + p[1] as u32 * 7152 + p[2] as u32 * 722, i))
+        .collect();
     lum.sort_unstable();
     let i = lum.get(lum.len().saturating_sub(1) * 3 / 4).map_or(0, |x| x.1);
     let (w, h) = (img.width.max(1) as usize, img.height.max(1) as usize);
@@ -177,7 +183,7 @@ fn albedo(part: &ImportPart) -> Image {
         img = bntx::half_size(&img, true);
     }
     if part.color != [1.0; 4] {
-        for p in img.rgba.chunks_exact_mut(4) {
+        for p in img.rgba.as_chunks_mut::<4>().0 {
             for (x, f) in p.iter_mut().zip(part.color) {
                 *x = (*x as f32 * f.clamp(0.0, 1.0) + 0.5) as u8;
             }
@@ -297,7 +303,7 @@ pub fn import(romfs: &Path, mod_dir: &Path, name: &str, label: &str, source: &st
     let mix_value = tex(&usable[0], "mix0").and_then(|t| bntx::load(romfs, &t, 64).ok()).map_or([128, 0, 255, 255], |img| {
         let n = (img.rgba.len() / 4).max(1) as u64;
         let mut s = [0u64; 4];
-        for p in img.rgba.chunks_exact(4) {
+        for p in img.rgba.as_chunks::<4>().0 {
             for c in 0..4 {
                 s[c] += p[c] as u64;
             }

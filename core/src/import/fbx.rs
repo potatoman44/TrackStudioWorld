@@ -255,10 +255,10 @@ impl Bin<'_> {
                 };
                 let bytes = bytes.get(..want).ok_or("array shorter than its count")?;
                 let prop = match ty {
-                    b'f' => Prop::Floats(bytes.chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap()) as f64).collect()),
-                    b'd' => Prop::Floats(bytes.chunks_exact(8).map(|c| f64::from_le_bytes(c.try_into().unwrap())).collect()),
-                    b'i' => Prop::Ints(bytes.chunks_exact(4).map(|c| i32::from_le_bytes(c.try_into().unwrap()) as i64).collect()),
-                    b'l' => Prop::Ints(bytes.chunks_exact(8).map(|c| i64::from_le_bytes(c.try_into().unwrap())).collect()),
+                    b'f' => Prop::Floats(bytes.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c) as f64).collect()),
+                    b'd' => Prop::Floats(bytes.as_chunks::<8>().0.iter().map(|c| f64::from_le_bytes(*c)).collect()),
+                    b'i' => Prop::Ints(bytes.as_chunks::<4>().0.iter().map(|c| i32::from_le_bytes(*c) as i64).collect()),
+                    b'l' => Prop::Ints(bytes.as_chunks::<8>().0.iter().map(|c| i64::from_le_bytes(*c)).collect()),
                     _ => Prop::Ints(bytes.iter().map(|&b| b as i64).collect()),
                 };
                 (prop, 12 + stored)
